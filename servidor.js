@@ -651,7 +651,7 @@ app.get('/play', async (req, res) => {
     url: info.url,
     duracion: info.duracion,
     posicion: sala.cancionActual ? sala.cola.length + 1 : 1,
-    radioUrl: `${HOST}/radio/${salaId}`,
+    radioUrl: `${HOST}/stream/${salaId}`,
     esFondo: false
   });
 });
@@ -671,7 +671,7 @@ app.get('/now', (req, res) => {
     } : null,
     cola: sala.cola.map(c => ({ nombre: c.titulo, titulo: c.titulo, url: c.url })),
     totalCola: sala.cola.length,
-    radioUrl: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers['host'] || 'localhost'}/radio/${salaId}`
+    radioUrl: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers['host'] || 'localhost'}/stream/${salaId}`
   });
 });
 
@@ -791,13 +791,61 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Endpoint STREAM simplificado compatible con IMVU (flujo MP3 continuo)
+// Este endpoint crea un stream directo sin buffer de chunks
+app.get('/stream/:salaId', async (req, res) => {
+  const salaId = req.params.salaId;
+  const sala = getSala(salaId);
+  
+  console.log(`[${salaId}] 🎧 STREAM - Cliente conectado`);
+  
+  // Headers estándar para stream de audio MP3
+  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Accept-Ranges', 'none');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  // Si no hay canción reproduciéndose, iniciar
+  if(!sala.reproduciendo && !sala.cancionActual){
+    console.log(`[${salaId}] 🎬 Iniciando transmisión continua...`);
+    reproducirSiguiente(salaId);
+    
+    // Esperar a que inicie el stream
+    let intentos = 0;
+    while(!sala.reproduciendo && intentos < 30){
+      await new Promise(r => setTimeout(r, 1000));
+      intentos++;
+    }
+  }
+  
+  // Verificar si hay stream activo
+  if(!sala.reproduciendo){
+    console.log(`[${salaId}] ⏳ Esperando stream...`);
+    // Enviar silencio o mensaje
+    res.status(503).end('Stream no disponible');
+    return;
+  }
+  
+  // Agregar cliente al sistema de broadcast
+  sala.clientes.push(res);
+  console.log(`[${salaId}] 👥 Clientes conectados: ${sala.clientes.length}`);
+  
+  // Manejar desconexión
+  req.on('close', () => {
+    const index = sala.clientes.indexOf(res);
+    if(index > -1) sala.clientes.splice(index, 1);
+    console.log(`[${salaId}] 📻 Cliente desconectado. Total: ${sala.clientes.length}`);
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   const cloudflareUrl = process.env.CLOUDFLARE_URL;
   const publicUrl = cloudflareUrl || 'No configurada';
   
-  console.log(`📻 PixelMafia Radio en http://localhost:${PORT}/radio/:salaId`);
-  console.log(`🌐 URL pública: ${publicUrl}/radio/:salaId`);
+  console.log(`📻 PixelMafia Radio en http://localhost:${PORT}/stream/:salaId`);
+  console.log(`🌐 URL pública: ${publicUrl}/stream/:salaId`);
   console.log(`✨ Sistema de colas por sala listo!`);
   console.log(`🎵 Modo: Radio 24/7 con música de fondo (lofi)`);
   
