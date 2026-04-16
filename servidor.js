@@ -1,4 +1,4 @@
-// servidor.js - Radio continua con colas por sala v2.2
+// servidor.js - Radio continua con colas por sala v2.3 (Spotify integrado)
 const express = require('express');
 const { spawn } = require('child_process');
 const cors = require('cors');
