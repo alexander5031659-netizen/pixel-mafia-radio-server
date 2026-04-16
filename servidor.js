@@ -11,32 +11,26 @@ app.use(cors());
 // Sistema de colas por sala con buffer compartido
 const salas = new Map(); // salaId -> { cola, cancionActual, reproduciendo, clientes, buffer, bufferIndex, procesos, modoFondo, cancionesFondo }
 
-// Playlist de música de fondo - URLs DIRECTAS para evitar búsquedas bloqueadas
+// Playlist de música de fondo - STREAMS DE RADIO PÚBLICOS 24/7
+// Estos no requieren yt-dlp ni play-dl, funcionan directo con ffmpeg
 const PLAYLIST_FONDO = [
   {
-    titulo: 'Lofi Girl - Study Music',
-    url: 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
-    duracion: 0
+    titulo: '📻 Lofi Radio 24/7',
+    url: 'https://stream.zeno.fm/0r0xa792kwzuv',
+    duracion: 0,
+    esStream: true  // Indica que es stream directo, no YouTube
   },
   {
-    titulo: 'Chill Lofi Beats',
-    url: 'https://www.youtube.com/watch?v=5qap5aO4i9A',
-    duracion: 0
+    titulo: '📻 Chill Hop Radio',
+    url: 'https://stream.zeno.fm/qqkk6k8syy8uv',
+    duracion: 0,
+    esStream: true
   },
   {
-    titulo: 'Relaxing Jazz Hop',
-    url: 'https://www.youtube.com/watch?v=Dx5qFachd3A',
-    duracion: 0
-  },
-  {
-    titulo: 'Lofi Hip Hop Radio',
-    url: 'https://www.youtube.com/watch?v=M7lc1UVf-VE',
-    duracion: 0
-  },
-  {
-    titulo: 'Chill Beats to Study',
-    url: 'https://www.youtube.com/watch?v=lTRiuFIWV54',
-    duracion: 0
+    titulo: '📻 Relaxing Lofi',
+    url: 'https://stream.zeno.fm/gq6hvq8syy8uv',
+    duracion: 0,
+    esStream: true
   }
 ];
 
@@ -283,7 +277,7 @@ async function reproducirFondo(salaId) {
         };
         
         sala.reproduciendo = true;
-        sala.cancionActual = { ...info, esFondo: true };
+        sala.cancionActual = { ...info, esFondo: true, esStream: cancionFondo.esStream || false };
         
         console.log(`[${salaId}] ▶️ Reproduciendo fondo:`, info.titulo);
         console.log(`[${salaId}] 🔗 URL:`, info.url);
@@ -311,27 +305,46 @@ async function streamCancion(cancion, sala) {
   return new Promise(async (resolve, reject) => {
     let stream;
     let usarYtdlp = false;
+    let esStreamDirecto = cancion.esStream === true;
     
-    try {
-      console.log(`[stream] 🔊 Intentando obtener stream con play-dl...`);
-      // Obtener stream de audio usando play-dl
-      stream = await play.stream(cancion.url, { quality: 1 }); // quality 1 = highest audio
-      console.log(`[stream] ✅ Stream obtenido con play-dl`);
-    } catch(e) {
-      const errorMsg = e.message || e.toString() || '';
-      console.error(`[stream] ❌ play-dl falló: ${errorMsg}`);
-      
-      // SIEMPRE intentar con yt-dlp cuando play-dl falla
-      // YouTube bloquea play-dl en servidores cloud
-      console.log(`[stream] 🔄 Usando yt-dlp (fallback automático)...`);
-      usarYtdlp = true;
+    // Si es stream de radio directo (no YouTube), conectar ffmpeg directo
+    if(esStreamDirecto) {
+      console.log(`[stream] � Stream de radio directo detectado: ${cancion.url}`);
+    } else {
+      // Intentar con play-dl primero (solo para YouTube)
+      try {
+        console.log(`[stream] 🔊 Intentando obtener stream con play-dl...`);
+        stream = await play.stream(cancion.url, { quality: 1 });
+        console.log(`[stream] ✅ Stream obtenido con play-dl`);
+      } catch(e) {
+        const errorMsg = e.message || e.toString() || '';
+        console.error(`[stream] ❌ play-dl falló: ${errorMsg}`);
+        console.log(`[stream] 🔄 Usando yt-dlp (fallback automático)...`);
+        usarYtdlp = true;
+      }
     }
     
     try {
       let ffmpeg;
       let ytdlpProcess = null;
       
-      if(usarYtdlp) {
+      if(esStreamDirecto) {
+        // Stream directo: ffmpeg se conecta directamente a la URL
+        console.log(`[stream] � Conectando ffmpeg a stream de radio...`);
+        ffmpeg = spawn('ffmpeg', [
+          '-hide_banner', '-loglevel', 'error',
+          '-i', cancion.url,     // Conectar directo a la URL del stream
+          '-vn',                  // Sin video
+          '-f', 'mp3',            // Formato MP3
+          '-b:a', '128k',         // Bitrate 128k
+          '-ar', '44100',         // Sample rate 44.1kHz
+          '-ac', '2',             // 2 canales (stereo)
+          'pipe:1'                // Salida a pipe
+        ], { stdio: ['ignore', 'pipe', 'pipe'] });
+        
+        console.log(`[stream] ✅ ffmpeg conectado a stream de radio`);
+        
+      } else if(usarYtdlp) {
         // Usar yt-dlp → ffmpeg para obtener y convertir audio
         console.log(`[stream] 🔊 Iniciando yt-dlp + ffmpeg...`);
         
