@@ -543,7 +543,8 @@ app.get('/play', async (req, res) => {
     titulo: info.titulo,
     duracion: info.duracion,
     posicion: sala.cancionActual ? sala.cola.length + 1 : 1,
-    radioUrl: `${HOST}/radio/${salaId}`
+    radioUrl: `${HOST}/radio/${salaId}`,
+    esFondo: false
   });
 });
 
@@ -553,7 +554,10 @@ app.get('/now', (req, res) => {
   const sala = getSala(salaId);
   
   res.json({
-    actual: sala.cancionActual,
+    actual: sala.cancionActual ? {
+      ...sala.cancionActual,
+      esFondo: sala.cancionActual.esFondo || false
+    } : null,
     cola: sala.cola.map(c => c.titulo),
     totalCola: sala.cola.length
   });
