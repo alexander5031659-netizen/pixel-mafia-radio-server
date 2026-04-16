@@ -55,7 +55,7 @@ async function refreshSpotifyToken() {
   }
 }
 
-// Buscar canción en Spotify
+// Buscar canción en Spotify y luego buscar audio en YouTube
 async function buscarSpotify(query) {
   const tokenValid = await refreshSpotifyToken();
   if (!tokenValid) {
@@ -78,17 +78,52 @@ async function buscarSpotify(query) {
     
     console.log(`✅ [Spotify] Encontrada: ${track.name} - ${track.artists[0].name}`);
     
+    // Construir query exacta para YouTube usando nombre de Spotify
+    const queryExacta = `${track.name} ${track.artists.map(a => a.name).join(' ')}`;
+    console.log(`🎵 [Spotify→YouTube] Buscando audio: "${queryExacta}"`);
+    
+    // Buscar en YouTube usando el nombre exacto de Spotify
+    let youtubeResult = null;
+    
+    // Intentar con yt-dlp primero
+    try {
+      youtubeResult = await buscarConYtdlp(queryExacta);
+      if (youtubeResult) {
+        console.log(`✅ [Spotify→YouTube] Audio encontrado: ${youtubeResult.titulo}`);
+      }
+    } catch (e) {
+      console.log(`  [yt-dlp] Error: ${e.message}`);
+    }
+    
+    // Si falló, intentar con scraping
+    if (!youtubeResult) {
+      try {
+        await delayIfNeeded();
+        youtubeResult = await buscarConScraping(queryExacta);
+        if (youtubeResult) {
+          console.log(`✅ [Spotify→YouTube] Audio encontrado (scraping): ${youtubeResult.titulo}`);
+        }
+      } catch (e) {
+        console.log(`  [scraping] Error: ${e.message}`);
+      }
+    }
+    
+    if (!youtubeResult) {
+      console.warn(`⚠️ [Spotify→YouTube] No se encontró audio para: ${queryExacta}`);
+      return null;
+    }
+    
+    // Retornar con información de Spotify + URL de YouTube
     return {
       titulo: `${track.name} - ${track.artists.map(a => a.name).join(', ')}`,
-      duracion: Math.floor(track.duration_ms / 1000),
-      url: track.external_urls.spotify, // URL de Spotify (para info)
-      spotifyUri: track.uri, // URI para reproducir
-      previewUrl: track.preview_url, // Preview de 30s (puede ser null)
+      duracion: youtubeResult.duracion || Math.floor(track.duration_ms / 1000),
+      url: youtubeResult.url, // URL de YouTube (para reproducir)
       esSpotify: true,
       artista: track.artists[0].name,
       nombre: track.name,
       album: track.album.name,
-      imagen: track.album.images[0]?.url
+      imagen: track.album.images[0]?.url,
+      spotifyUrl: track.external_urls.spotify // Para referencia
     };
     
   } catch (error) {
