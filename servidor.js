@@ -1,4 +1,4 @@
-// servidor.js - Radio continua con colas por sala v2.1
+// servidor.js - Radio continua con colas por sala v2.2
 const express = require('express');
 const { spawn } = require('child_process');
 const cors = require('cors');
@@ -20,6 +20,91 @@ if (fs.existsSync(COOKIES_PATH)) {
   console.log(`   Tamaño: ${stats.size} bytes`);
 } else {
   console.warn('⚠️ Archivo cookies.txt NO encontrado en:', COOKIES_PATH);
+}
+
+// ═══════════════════════════════════════════════════════════
+// 🎵 INTEGRACIÓN CON SPOTIFY
+// ═══════════════════════════════════════════════════════════
+const SpotifyWebApi = require('spotify-web-api-node');
+
+// Configurar credenciales de Spotify
+const spotifyApi = new SpotifyWebApi({
+  clientId: process.env.SPOTIFY_CLIENT_ID,
+  clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+});
+
+let spotifyTokenExpires = 0;
+
+// Función para obtener/renovar token de Spotify
+async function refreshSpotifyToken() {
+  const now = Date.now();
+  if (now < spotifyTokenExpires - 60000) {
+    // Token aún válido (con margen de 1 minuto)
+    return true;
+  }
+  
+  try {
+    console.log('🎵 [Spotify] Renovando token de acceso...');
+    const data = await spototifyApi.clientCredentialsGrant();
+    spotifyApi.setAccessToken(data.body['access_token']);
+    spotifyTokenExpires = now + (data.body['expires_in'] * 1000);
+    console.log('✅ [Spotify] Token renovado exitosamente');
+    return true;
+  } catch (error) {
+    console.error('❌ [Spotify] Error al obtener token:', error.message);
+    return false;
+  }
+}
+
+// Buscar canción en Spotify
+async function buscarSpotify(query) {
+  const tokenValid = await refreshSpotifyToken();
+  if (!tokenValid) {
+    console.error('❌ [Spotify] No se pudo obtener token válido');
+    return null;
+  }
+  
+  try {
+    console.log(`🎵 [Spotify] Buscando: "${query}"`);
+    
+    // Buscar tracks
+    const result = await spotifyApi.searchTracks(query, { limit: 1 });
+    
+    if (result.body.tracks.items.length === 0) {
+      console.log('⚠️ [Spotify] No se encontraron resultados');
+      return null;
+    }
+    
+    const track = result.body.tracks.items[0];
+    
+    console.log(`✅ [Spotify] Encontrada: ${track.name} - ${track.artists[0].name}`);
+    
+    return {
+      titulo: `${track.name} - ${track.artists.map(a => a.name).join(', ')}`,
+      duracion: Math.floor(track.duration_ms / 1000),
+      url: track.external_urls.spotify, // URL de Spotify (para info)
+      spotifyUri: track.uri, // URI para reproducir
+      previewUrl: track.preview_url, // Preview de 30s (puede ser null)
+      esSpotify: true,
+      artista: track.artists[0].name,
+      nombre: track.name,
+      album: track.album.name,
+      imagen: track.album.images[0]?.url
+    };
+    
+  } catch (error) {
+    console.error('❌ [Spotify] Error en búsqueda:', error.message);
+    return null;
+  }
+}
+
+// Verificar configuración de Spotify al iniciar
+if (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET) {
+  console.log('🎵 [Spotify] Configuración detectada');
+  refreshSpotifyToken();
+} else {
+  console.warn('⚠️ [Spotify] No configurado. SPOTIFY_CLIENT_ID y/o SPOTIFY_CLIENT_SECRET faltantes');
+  console.warn('   Obtén credenciales en: https://developer.spotify.com/dashboard');
 }
 
 // Sistema de colas por sala con buffer compartido
@@ -239,6 +324,20 @@ async function buscarYoutube(query) {
   console.log(`🔍 Buscando canción: "${query}"`);
   
   await delayIfNeeded();
+
+  // MÉTODO 0: Spotify (si está configurado - NO usa IPs de cloud)
+  if (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET) {
+    try {
+      console.log('  [método 0] Intentando con Spotify...');
+      const resultado = await buscarSpotify(query);
+      if (resultado) {
+        console.log(`✅ Encontrada con Spotify: ${resultado.titulo}`);
+        return resultado;
+      }
+    } catch (e) {
+      console.log(`  [Spotify] Error: ${e.message}`);
+    }
+  }
 
   // MÉTODO 1: yt-dlp con cookies (más confiable con autenticación)
   try {
