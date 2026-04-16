@@ -580,7 +580,9 @@ app.get('/play', async (req, res) => {
   console.log(`[${salaId}] 📋 Canción agregada a cola. Esperando cliente para iniciar...`);
 
   res.json({
+    nombre: info.titulo,
     titulo: info.titulo,
+    url: info.url,
     duracion: info.duracion,
     posicion: sala.cancionActual ? sala.cola.length + 1 : 1,
     radioUrl: `${HOST}/radio/${salaId}`,
@@ -595,11 +597,15 @@ app.get('/now', (req, res) => {
   
   res.json({
     actual: sala.cancionActual ? {
-      ...sala.cancionActual,
+      nombre: sala.cancionActual.titulo,
+      titulo: sala.cancionActual.titulo,
+      url: sala.cancionActual.url,
+      duracion: sala.cancionActual.duracion,
       esFondo: sala.cancionActual.esFondo || false
     } : null,
-    cola: sala.cola.map(c => c.titulo),
-    totalCola: sala.cola.length
+    cola: sala.cola.map(c => ({ nombre: c.titulo, titulo: c.titulo, url: c.url })),
+    totalCola: sala.cola.length,
+    radioUrl: `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers['host'] || 'localhost'}/radio/${salaId}`
   });
 });
 
