@@ -348,13 +348,14 @@ async function streamCancion(cancion, sala) {
         // Usar yt-dlp → ffmpeg para obtener y convertir audio
         console.log(`[stream] 🔊 Iniciando yt-dlp + ffmpeg...`);
         
-        // Primero iniciar yt-dlp
+        // Primero iniciar yt-dlp con cookies para autenticación
         ytdlpProcess = spawn('yt-dlp', [
           '-f', 'bestaudio[ext=m4a]/bestaudio/best',
           '-o', '-',
           '--no-check-certificates',
           '--no-warnings',
           '--quiet',
+          '--cookies', 'cookies.txt',  // Usar cookies de YouTube
           cancion.url
         ], { stdio: ['ignore', 'pipe', 'pipe'] });
         
