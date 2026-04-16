@@ -11,13 +11,33 @@ app.use(cors());
 // Sistema de colas por sala con buffer compartido
 const salas = new Map(); // salaId -> { cola, cancionActual, reproduciendo, clientes, buffer, bufferIndex, procesos, modoFondo, cancionesFondo }
 
-// Playlist de música de fondo (lofi/chill)
+// Playlist de música de fondo - URLs DIRECTAS para evitar búsquedas bloqueadas
 const PLAYLIST_FONDO = [
-  'lofi hip hop radio - beats to relax/study to',
-  'chill lofi beats',
-  'relaxing jazz hop',
-  'chill beats study music',
-  'lofi beats 2024'
+  {
+    titulo: 'Lofi Girl - Study Music',
+    url: 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
+    duracion: 0
+  },
+  {
+    titulo: 'Chill Lofi Beats',
+    url: 'https://www.youtube.com/watch?v=5qap5aO4i9A',
+    duracion: 0
+  },
+  {
+    titulo: 'Relaxing Jazz Hop',
+    url: 'https://www.youtube.com/watch?v=Dx5qFachd3A',
+    duracion: 0
+  },
+  {
+    titulo: 'Lofi Hip Hop Radio',
+    url: 'https://www.youtube.com/watch?v=M7lc1UVf-VE',
+    duracion: 0
+  },
+  {
+    titulo: 'Chill Beats to Study',
+    url: 'https://www.youtube.com/watch?v=lTRiuFIWV54',
+    duracion: 0
+  }
 ];
 
 function getSala(salaId) {
@@ -248,24 +268,25 @@ async function reproducirFondo(salaId) {
     
     // El servidor transmite siempre, sin importar si hay clientes
     
-    // Seleccionar canción de fondo
-    const query = sala.cancionesFondo[sala.indiceFondo % sala.cancionesFondo.length];
+    // Seleccionar canción de fondo (URL directa, sin búsqueda)
+    const cancionFondo = sala.cancionesFondo[sala.indiceFondo % sala.cancionesFondo.length];
     sala.indiceFondo++;
     
-    console.log(`[${salaId}] 🎵 Buscando música de fondo: "${query}"`);
+    console.log(`[${salaId}] 🎵 Usando música de fondo (URL directa): "${cancionFondo.titulo}"`);
     
     try {
-        const info = await buscarYoutube(query);
-        if(!info) {
-            console.log(`[${salaId}] ⚠️ No se encontró música de fondo, reintentando en 30s...`);
-            setTimeout(() => reproducirFondo(salaId), 30000); // Esperar 30s antes de reintentar
-            return;
-        }
+        // Usar URL directa sin búsqueda - evita bloqueos de YouTube
+        const info = {
+          titulo: cancionFondo.titulo,
+          url: cancionFondo.url,
+          duracion: cancionFondo.duracion
+        };
         
         sala.reproduciendo = true;
         sala.cancionActual = { ...info, esFondo: true };
         
         console.log(`[${salaId}] ▶️ Reproduciendo fondo:`, info.titulo);
+        console.log(`[${salaId}] 🔗 URL:`, info.url);
         
         await streamCancion(sala.cancionActual, sala);
         
@@ -289,36 +310,84 @@ async function reproducirFondo(salaId) {
 async function streamCancion(cancion, sala) {
   return new Promise(async (resolve, reject) => {
     let stream;
+    let usarYtdlp = false;
+    
     try {
-      console.log(`[stream] 🔊 Obteniendo stream de play-dl...`);
+      console.log(`[stream] 🔊 Intentando obtener stream con play-dl...`);
       // Obtener stream de audio usando play-dl
       stream = await play.stream(cancion.url, { quality: 1 }); // quality 1 = highest audio
-      console.log(`[stream] ✅ Stream obtenido correctamente`);
+      console.log(`[stream] ✅ Stream obtenido con play-dl`);
     } catch(e) {
-      console.error(`[stream] ❌ Error obteniendo stream: ${e.message}`);
-      // Si es rate limit, reportar pero no crashear
-      if(e.message?.includes('429') || e.message?.includes('unusual traffic')) {
-        console.log(`[stream] ⚠️ Rate limit de YouTube, reintentando en 60s...`);
+      console.error(`[stream] ❌ play-dl falló: ${e.message}`);
+      
+      // Si es error de bot/rate limit, intentar con yt-dlp
+      if(e.message?.includes('bot') || e.message?.includes('429') || e.message?.includes('Sign in')) {
+        console.log(`[stream] 🔄 Intentando con yt-dlp como fallback...`);
+        usarYtdlp = true;
+      } else {
+        reject(e);
+        return;
       }
-      reject(e);
-      return;
     }
     
     try {
-      const ffmpeg = spawn('ffmpeg', [
-        '-hide_banner', '-loglevel', 'error',
-        '-i', 'pipe:0',
-        '-vn',
-        '-f', 'mp3',
-        '-b:a', '128k',
-        'pipe:1'
-      ], { stdio: ['pipe', 'pipe', 'pipe'] });
+      let ffmpeg;
+      let ytdlpProcess = null;
+      
+      if(usarYtdlp) {
+        // Usar yt-dlp → ffmpeg para obtener y convertir audio
+        console.log(`[stream] 🔊 Iniciando yt-dlp + ffmpeg...`);
+        
+        // Primero iniciar yt-dlp
+        ytdlpProcess = spawn('yt-dlp', [
+          '-f', 'bestaudio[ext=m4a]/bestaudio/best',
+          '-o', '-',
+          '--no-check-certificates',
+          '--no-warnings',
+          '--quiet',
+          cancion.url
+        ], { stdio: ['ignore', 'pipe', 'pipe'] });
+        
+        // Luego iniciar ffmpeg que recibe de yt-dlp
+        ffmpeg = spawn('ffmpeg', [
+          '-hide_banner', '-loglevel', 'error',
+          '-i', 'pipe:0',
+          '-vn',
+          '-f', 'mp3',
+          '-b:a', '128k',
+          'pipe:1'
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        
+        // Conectar yt-dlp stdout a ffmpeg stdin
+        ytdlpProcess.stdout.pipe(ffmpeg.stdin);
+        ytdlpProcess.stderr.on('data', (data) => {
+          console.log(`[yt-dlp] ${data.toString().trim()}`);
+        });
+        ytdlpProcess.on('error', (err) => {
+          console.error(`[yt-dlp] Error: ${err.message}`);
+        });
+        
+        console.log(`[stream] ✅ yt-dlp + ffmpeg iniciados`);
+      } else {
+        // Usar ffmpeg con stream de play-dl
+        ffmpeg = spawn('ffmpeg', [
+          '-hide_banner', '-loglevel', 'error',
+          '-i', 'pipe:0',
+          '-vn',
+          '-f', 'mp3',
+          '-b:a', '128k',
+          'pipe:1'
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        
+        // Conectar stream de play-dl a ffmpeg
+        if(stream && stream.stream) {
+          stream.stream.pipe(ffmpeg.stdin);
+        }
+      }
 
       // Guardar referencia al proceso
       sala.procesos.ffmpeg = ffmpeg;
-      
-      // Conectar stream de play-dl a ffmpeg
-      stream.stream.pipe(ffmpeg.stdin);
+      if(ytdlpProcess) sala.procesos.ytdlp = ytdlpProcess;
 
       let bytesEnviados = 0;
       let streamTerminado = false;
