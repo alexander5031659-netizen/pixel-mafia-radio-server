@@ -312,12 +312,19 @@ async function reproducirSiguiente(salaId) {
         await streamCancion(sala.cancionActual, sala);
     } catch(e) {
         console.error(`[${salaId}] ❌ Error reproduciendo:`, e.message);
+        // Si falló, devolver canción a la cola para reintentar después
+        if (sala.cancionActual && !sala.cancionActual.esFondo) {
+            console.log(`[${salaId}] 🔄 Devolviendo canción a la cola para reintentar...`);
+            sala.cola.unshift(sala.cancionActual);
+        }
     }
     
     sala.reproduciendo = false;
     
-    console.log(`[${salaId}] ✅ Canción terminada:`, sala.cancionActual.titulo);
-    sala.cancionActual = null;
+    if (sala.cancionActual) {
+        console.log(`[${salaId}] ✅ Canción terminada:`, sala.cancionActual.titulo);
+        sala.cancionActual = null;
+    }
     
     // Reproducir siguiente automáticamente
     if(sala.cola.length > 0){
