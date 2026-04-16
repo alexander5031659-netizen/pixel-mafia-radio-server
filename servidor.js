@@ -9,7 +9,16 @@ const app = express();
 app.use(cors());
 
 // Sistema de colas por sala con buffer compartido
-const salas = new Map(); // salaId -> { cola, cancionActual, reproduciendo, clientes, buffer, bufferIndex, procesos }
+const salas = new Map(); // salaId -> { cola, cancionActual, reproduciendo, clientes, buffer, bufferIndex, procesos, modoFondo, cancionesFondo }
+
+// Playlist de música de fondo (lofi/chill)
+const PLAYLIST_FONDO = [
+  'lofi hip hop radio - beats to relax/study to',
+  'chill lofi beats',
+  'relaxing jazz hop',
+  'chill beats study music',
+  'lofi beats 2024'
+];
 
 function getSala(salaId) {
     if(!salas.has(salaId)){
@@ -21,7 +30,10 @@ function getSala(salaId) {
             buffer: [], // Buffer circular para sincronización
             bufferIndex: 0,
             bufferSize: 150, // Aumentado a 150 chunks para mejor sincronización móvil
-            procesos: { ytdlp: null, ffmpeg: null } // Procesos activos
+            procesos: { ytdlp: null, ffmpeg: null }, // Procesos activos
+            modoFondo: true, // Por defecto, reproducir música de fondo
+            cancionesFondo: [...PLAYLIST_FONDO], // Copia de la playlist
+            indiceFondo: 0 // Índice actual en la playlist de fondo
         });
     }
     return salas.get(salaId);
@@ -154,18 +166,20 @@ async function reproducirSiguiente(salaId) {
         return;
     }
     
-    // Si no hay canciones en cola, no hacer nada
+    // Si no hay canciones en cola, reproducir música de fondo
     if(sala.cola.length === 0) {
-        console.log(`[${salaId}] 📭 Cola vacía - Esperando canciones...`);
-        return;
+        if(sala.modoFondo && sala.cancionesFondo.length > 0) {
+            console.log(`[${salaId}] 📭 Cola vacía - Iniciando música de fondo...`);
+            await reproducirFondo(salaId);
+            return;
+        } else {
+            console.log(`[${salaId}] 📭 Cola vacía - Esperando canciones...`);
+            return;
+        }
     }
     
-    // Esperar a que haya al menos un cliente conectado antes de empezar
-    if(sala.clientes.length === 0) {
-        console.log(`[${salaId}] ⏳ Esperando que se conecte un cliente antes de reproducir...`);
-        setTimeout(() => reproducirSiguiente(salaId), 2000);
-        return;
-    }
+    // NOTA: El servidor transmite siempre, con o sin clientes
+    // El buffer se mantiene lleno para que nuevos clientes se sincronicen inmediatamente
     
     // Hay canciones en la cola y clientes conectados, reproducir
     sala.reproduciendo = true;
@@ -186,12 +200,61 @@ async function reproducirSiguiente(salaId) {
     console.log(`[${salaId}] ✅ Canción terminada:`, sala.cancionActual.titulo);
     sala.cancionActual = null;
     
-    // Reproducir siguiente automáticamente solo si hay más en la cola
+    // Reproducir siguiente automáticamente
     if(sala.cola.length > 0){
         console.log(`[${salaId}] 🔄 Hay más canciones, reproduciendo siguiente...`);
         setTimeout(() => reproducirSiguiente(salaId), 1000);
+    } else if(sala.modoFondo) {
+        console.log(`[${salaId}] 📭 Cola vacía - Volviendo a música de fondo...`);
+        setTimeout(() => reproducirSiguiente(salaId), 1000);
     } else {
-        console.log(`[${salaId}] 📭 No hay más canciones en cola, esperando...`);
+        console.log(`[${salaId}] � No hay más canciones en cola, esperando...`);
+    }
+}
+
+// Reproducir música de fondo (lofi/chill)
+async function reproducirFondo(salaId) {
+    const sala = getSala(salaId);
+    
+    if(sala.reproduciendo) {
+        console.log(`[${salaId}] ⏸️ Ya está reproduciendo, no iniciar fondo`);
+        return;
+    }
+    
+    // El servidor transmite siempre, sin importar si hay clientes
+    
+    // Seleccionar canción de fondo
+    const query = sala.cancionesFondo[sala.indiceFondo % sala.cancionesFondo.length];
+    sala.indiceFondo++;
+    
+    console.log(`[${salaId}] 🎵 Buscando música de fondo: "${query}"`);
+    
+    try {
+        const info = await buscarYoutube(query);
+        if(!info) {
+            console.log(`[${salaId}] ⚠️ No se encontró música de fondo, intentando siguiente...`);
+            setTimeout(() => reproducirFondo(salaId), 1000);
+            return;
+        }
+        
+        sala.reproduciendo = true;
+        sala.cancionActual = { ...info, esFondo: true };
+        
+        console.log(`[${salaId}] ▶️ Reproduciendo fondo:`, info.titulo);
+        
+        await streamCancion(sala.cancionActual, sala);
+        
+        sala.reproduciendo = false;
+        sala.cancionActual = null;
+        
+        // Continuar con siguiente canción de fondo
+        console.log(`[${salaId}] 🔄 Fondo terminado, siguiente...`);
+        setTimeout(() => reproducirSiguiente(salaId), 1000);
+        
+    } catch(e) {
+        console.error(`[${salaId}] ❌ Error en fondo:`, e.message);
+        sala.reproduciendo = false;
+        setTimeout(() => reproducirFondo(salaId), 2000);
     }
 }
 
@@ -342,9 +405,10 @@ app.get('/radio/:salaId', (req, res) => {
   sala.clientes.push(res);
   console.log(`[${salaId}] 👥 Total clientes: ${sala.clientes.length}`);
   
-  // Si es el primer cliente y hay canciones en cola, iniciar reproducción INMEDIATAMENTE
-  if(sala.clientes.length === 1 && !sala.reproduciendo && !sala.cancionActual && sala.cola.length > 0){
-    console.log(`[${salaId}] 🎬 Primer cliente conectado, iniciando reproducción AHORA...`);
+  // Si el servidor no está reproduciendo nada, iniciar automáticamente
+  // La radio funciona 24/7 con o sin clientes
+  if(!sala.reproduciendo && !sala.cancionActual){
+    console.log(`[${salaId}] 🎬 Cliente conectado - Iniciando transmisión continua...`);
     setTimeout(() => reproducirSiguiente(salaId), 500);
   }
   
@@ -403,7 +467,39 @@ app.get('/play', async (req, res) => {
   console.log(`[${salaId}] 📊 Estado actual:`);
   console.log(`[${salaId}]    - Reproduciendo:`, sala.reproduciendo);
   console.log(`[${salaId}]    - Canción actual:`, sala.cancionActual ? sala.cancionActual.titulo : 'Ninguna');
+  console.log(`[${salaId}]    - Es fondo:`, sala.cancionActual?.esFondo || false);
   console.log(`[${salaId}]    - Total en cola:`, sala.cola.length);
+  
+  // Si está reproduciendo música de fondo, interrumpir y poner la canción solicitada
+  if(sala.reproduciendo && sala.cancionActual?.esFondo) {
+    console.log(`[${salaId}] 🎵 Interrumpiendo música de fondo para reproducir canción solicitada...`);
+    // Matar procesos actuales para detener el fondo
+    try {
+      if(sala.procesos.ffmpeg) {
+        sala.procesos.ffmpeg.kill('SIGKILL');
+        sala.procesos.ffmpeg = null;
+      }
+      if(sala.procesos.ytdlp) {
+        sala.procesos.ytdlp.kill('SIGKILL');
+        sala.procesos.ytdlp = null;
+      }
+    } catch(e) {
+      console.log(`[${salaId}] ⚠️ Error deteniendo fondo:`, e.message);
+    }
+    sala.reproduciendo = false;
+    sala.cancionActual = null;
+    // Limpiar buffer
+    sala.buffer = [];
+    sala.bufferIndex = 0;
+    
+    // Iniciar reproducción de la canción solicitada inmediatamente
+    setTimeout(() => reproducirSiguiente(salaId), 500);
+  }
+  // Si no está reproduciendo nada, iniciar
+  else if(!sala.reproduciendo && sala.clientes.length > 0) {
+    console.log(`[${salaId}] 🎵 Iniciando reproducción...`);
+    setTimeout(() => reproducirSiguiente(salaId), 500);
+  }
 
   // Detectar URL pública automáticamente
   function getPublicUrl(req) {
@@ -587,4 +683,12 @@ app.listen(PORT, () => {
   console.log(`📻 PixelMafia Radio en http://localhost:${PORT}/radio/:salaId`);
   console.log(`🌐 URL pública: ${publicUrl}/radio/:salaId`);
   console.log(`✨ Sistema de colas por sala listo!`);
+  console.log(`🎵 Modo: Radio 24/7 con música de fondo (lofi)`);
+  
+  // Iniciar sala de prueba automáticamente para que siempre haya audio
+  const salaDemo = 'demo';
+  const sala = getSala(salaDemo);
+  sala.modoFondo = true;
+  console.log(`\n🎬 Iniciando sala demo automáticamente...`);
+  setTimeout(() => reproducirSiguiente(salaDemo), 2000);
 });
