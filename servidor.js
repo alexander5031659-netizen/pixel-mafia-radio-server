@@ -405,21 +405,37 @@ app.get('/play', async (req, res) => {
   console.log(`[${salaId}]    - Canción actual:`, sala.cancionActual ? sala.cancionActual.titulo : 'Ninguna');
   console.log(`[${salaId}]    - Total en cola:`, sala.cola.length);
 
-  const PORT = process.env.PORT || 5000;
-  const fs = require('fs');
-  
-  // Leer URL de Cloudflare del archivo SIEMPRE
-  let cloudflareUrl = null;
-  try {
-    if(fs.existsSync('.cloudflare_url')){
-      cloudflareUrl = fs.readFileSync('.cloudflare_url', 'utf8').trim();
-      console.log(`[${salaId}] 🌐 URL de Cloudflare leída: ${cloudflareUrl}`);
+  // Detectar URL pública automáticamente
+  function getPublicUrl(req) {
+    // 1. Variable de entorno de Render
+    if (process.env.RENDER_EXTERNAL_URL) {
+      return process.env.RENDER_EXTERNAL_URL;
     }
-  } catch(e) {
-    console.log(`[${salaId}] ⚠️ Error leyendo archivo:`, e.message);
+    
+    // 2. Headers de proxy (Cloudflare, Nginx, etc)
+    const protocol = req.headers['x-forwarded-proto'] || 'http';
+    const host = req.headers['x-forwarded-host'] || req.headers['host'] || `localhost:${PORT}`;
+    
+    // Si es un dominio público (no localhost), usarlo
+    if (!host.includes('localhost') && !host.includes('127.0.0.1')) {
+      return `${protocol}://${host}`;
+    }
+    
+    // 3. Intentar leer archivo de Cloudflare
+    try {
+      const fs = require('fs');
+      if(fs.existsSync('.cloudflare_url')){
+        const url = fs.readFileSync('.cloudflare_url', 'utf8').trim();
+        console.log(`[${salaId}] 🌐 URL de Cloudflare leída: ${url}`);
+        return url;
+      }
+    } catch(e) {}
+    
+    // 4. Fallback a localhost
+    return `http://localhost:${PORT}`;
   }
   
-  const HOST = (cloudflareUrl || `http://localhost:${PORT}`).replace(/\/$/, '');
+  const HOST = getPublicUrl(req).replace(/\/$/, '');
   
   console.log(`[${salaId}] 🌐 HOST final para respuesta:`, HOST);
 
