@@ -115,11 +115,28 @@ async function buscarConScraping(query) {
   });
 }
 
+// Delay entre requests para evitar rate limits
+const DELAY_BETWEEN_REQUESTS = 5000; // 5 segundos
+let lastRequestTime = 0;
+
+async function delayIfNeeded() {
+  const now = Date.now();
+  const elapsed = now - lastRequestTime;
+  if (elapsed < DELAY_BETWEEN_REQUESTS) {
+    const waitTime = DELAY_BETWEEN_REQUESTS - elapsed;
+    console.log(`⏳ Esperando ${waitTime}ms para evitar rate limit...`);
+    await new Promise(r => setTimeout(r, waitTime));
+  }
+  lastRequestTime = Date.now();
+}
+
 // Buscar con reintentos y múltiples métodos
 async function buscarYoutube(query) {
   console.log(`🔍 Buscando canción: "${query}"`);
+  
+  await delayIfNeeded();
 
-  // Intentar con play-dl (3 reintentos)
+  // Intentar con play-dl (3 reintentos con backoff exponencial)
   for (let intento = 1; intento <= 3; intento++) {
     try {
       console.log(`  [play-dl] Intento ${intento}/3...`);
@@ -130,13 +147,21 @@ async function buscarYoutube(query) {
       }
     } catch (e) {
       console.log(`  [play-dl] Error intento ${intento}: ${e.message}`);
-      if (intento < 3) await new Promise(r => setTimeout(r, 1500));
+      // Si es error 429, esperar más tiempo
+      if (e.message?.includes('429') || e.message?.includes('unusual traffic')) {
+        const waitTime = 30000 * intento; // 30s, 60s, 90s
+        console.log(`⚠️ Rate limit detectado, esperando ${waitTime/1000}s...`);
+        await new Promise(r => setTimeout(r, waitTime));
+      } else if (intento < 3) {
+        await new Promise(r => setTimeout(r, 3000 * intento)); // 3s, 6s, 9s
+      }
     }
   }
 
   // Fallback: scraping directo de YouTube
   try {
     console.log('  [scraping] Intentando búsqueda alternativa...');
+    await delayIfNeeded();
     const resultado = await buscarConScraping(query);
     if (resultado) {
       console.log(`✅ Encontrada con scraping: ${resultado.titulo}`);
@@ -232,8 +257,8 @@ async function reproducirFondo(salaId) {
     try {
         const info = await buscarYoutube(query);
         if(!info) {
-            console.log(`[${salaId}] ⚠️ No se encontró música de fondo, intentando siguiente...`);
-            setTimeout(() => reproducirFondo(salaId), 1000);
+            console.log(`[${salaId}] ⚠️ No se encontró música de fondo, reintentando en 30s...`);
+            setTimeout(() => reproducirFondo(salaId), 30000); // Esperar 30s antes de reintentar
             return;
         }
         
@@ -254,17 +279,32 @@ async function reproducirFondo(salaId) {
     } catch(e) {
         console.error(`[${salaId}] ❌ Error en fondo:`, e.message);
         sala.reproduciendo = false;
-        setTimeout(() => reproducirFondo(salaId), 2000);
+        // No propagar el error - solo loguear y reintentar
+        console.log(`[${salaId}] 🔄 Reintentando fondo en 60s...`);
+        setTimeout(() => reproducirFondo(salaId), 60000);
     }
 }
 
 // Stream de una canción con buffer compartido para sincronización
 async function streamCancion(cancion, sala) {
   return new Promise(async (resolve, reject) => {
+    let stream;
     try {
+      console.log(`[stream] 🔊 Obteniendo stream de play-dl...`);
       // Obtener stream de audio usando play-dl
-      const stream = await play.stream(cancion.url, { quality: 1 }); // quality 1 = highest audio
-      
+      stream = await play.stream(cancion.url, { quality: 1 }); // quality 1 = highest audio
+      console.log(`[stream] ✅ Stream obtenido correctamente`);
+    } catch(e) {
+      console.error(`[stream] ❌ Error obteniendo stream: ${e.message}`);
+      // Si es rate limit, reportar pero no crashear
+      if(e.message?.includes('429') || e.message?.includes('unusual traffic')) {
+        console.log(`[stream] ⚠️ Rate limit de YouTube, reintentando en 60s...`);
+      }
+      reject(e);
+      return;
+    }
+    
+    try {
       const ffmpeg = spawn('ffmpeg', [
         '-hide_banner', '-loglevel', 'error',
         '-i', 'pipe:0',
@@ -694,5 +734,9 @@ app.listen(PORT, () => {
   const sala = getSala(salaDemo);
   sala.modoFondo = true;
   console.log(`\n🎬 Iniciando sala demo automáticamente...`);
-  setTimeout(() => reproducirSiguiente(salaDemo), 2000);
+  // Delay inicial para evitar rate limit al arrancar
+  setTimeout(() => {
+    console.log(`[${salaDemo}] 🚀 Iniciando transmisión con delay de seguridad...`);
+    reproducirSiguiente(salaDemo);
+  }, 10000); // 10 segundos de delay inicial
 });
