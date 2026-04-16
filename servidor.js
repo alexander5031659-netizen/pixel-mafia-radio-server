@@ -318,16 +318,13 @@ async function streamCancion(cancion, sala) {
       stream = await play.stream(cancion.url, { quality: 1 }); // quality 1 = highest audio
       console.log(`[stream] ✅ Stream obtenido con play-dl`);
     } catch(e) {
-      console.error(`[stream] ❌ play-dl falló: ${e.message}`);
+      const errorMsg = e.message || e.toString() || '';
+      console.error(`[stream] ❌ play-dl falló: ${errorMsg}`);
       
-      // Si es error de bot/rate limit, intentar con yt-dlp
-      if(e.message?.includes('bot') || e.message?.includes('429') || e.message?.includes('Sign in')) {
-        console.log(`[stream] 🔄 Intentando con yt-dlp como fallback...`);
-        usarYtdlp = true;
-      } else {
-        reject(e);
-        return;
-      }
+      // SIEMPRE intentar con yt-dlp cuando play-dl falla
+      // YouTube bloquea play-dl en servidores cloud
+      console.log(`[stream] 🔄 Usando yt-dlp (fallback automático)...`);
+      usarYtdlp = true;
     }
     
     try {
