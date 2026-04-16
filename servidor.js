@@ -3,10 +3,24 @@ const express = require('express');
 const { spawn } = require('child_process');
 const cors = require('cors');
 const play = require('play-dl');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
+
+// Path absoluto al archivo de cookies
+const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
+
+// Verificar que cookies.txt existe al iniciar
+if (fs.existsSync(COOKIES_PATH)) {
+  console.log('✅ Archivo cookies.txt encontrado:', COOKIES_PATH);
+  const stats = fs.statSync(COOKIES_PATH);
+  console.log(`   Tamaño: ${stats.size} bytes`);
+} else {
+  console.warn('⚠️ Archivo cookies.txt NO encontrado en:', COOKIES_PATH);
+}
 
 // Sistema de colas por sala con buffer compartido
 const salas = new Map(); // salaId -> { cola, cancionActual, reproduciendo, clientes, buffer, bufferIndex, procesos, modoFondo, cancionesFondo }
@@ -98,7 +112,7 @@ async function buscarConYtdlp(query) {
       // Si es URL directa, obtener info del video
       args = [
         '-j',  // Output JSON
-        '--cookies', 'cookies.txt',
+        '--cookies', COOKIES_PATH,
         '--no-check-certificates',
         '--no-warnings',
         query
@@ -108,7 +122,7 @@ async function buscarConYtdlp(query) {
       args = [
         'ytsearch1:' + query,  // Buscar en YouTube, 1 resultado
         '-j',  // Output JSON
-        '--cookies', 'cookies.txt',
+        '--cookies', COOKIES_PATH,
         '--no-check-certificates',
         '--no-warnings'
       ];
@@ -427,13 +441,14 @@ async function streamCancion(cancion, sala) {
         console.log(`[stream] 🔊 Iniciando yt-dlp + ffmpeg...`);
         
         // Primero iniciar yt-dlp con cookies para autenticación
+        console.log(`[stream] 📁 Usando cookies: ${COOKIES_PATH}`);
         ytdlpProcess = spawn('yt-dlp', [
           '-f', 'bestaudio[ext=m4a]/bestaudio/best',
           '-o', '-',
           '--no-check-certificates',
           '--no-warnings',
           '--quiet',
-          '--cookies', 'cookies.txt',  // Usar cookies de YouTube
+          '--cookies', COOKIES_PATH,  // Usar cookies de YouTube (path absoluto)
           cancion.url
         ], { stdio: ['ignore', 'pipe', 'pipe'] });
         
