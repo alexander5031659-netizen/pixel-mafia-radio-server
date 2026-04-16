@@ -252,21 +252,9 @@ async function buscarYoutube(query) {
     console.log(`  [yt-dlp] Error: ${e.message}`);
   }
 
-  // MÉTODO 2: Intentar con play-dl (sin cookies, puede fallar en cloud)
+  // MÉTODO 2: Fallback scraping directo de YouTube (play-dl deshabilitado - causa crashes)
   try {
-    console.log('  [método 2] Intentando con play-dl...');
-    const resultado = await buscarConPlayDl(query);
-    if (resultado) {
-      console.log(`✅ Encontrada con play-dl: ${resultado.titulo}`);
-      return resultado;
-    }
-  } catch (e) {
-    console.log(`  [play-dl] Error: ${e.message}`);
-  }
-
-  // MÉTODO 3: Fallback scraping directo de YouTube
-  try {
-    console.log('  [método 3] Intentando búsqueda alternativa (scraping)...');
+    console.log('  [método 2] Intentando búsqueda alternativa (scraping)...');
     await delayIfNeeded();
     const resultado = await buscarConScraping(query);
     if (resultado) {
@@ -401,19 +389,11 @@ async function streamCancion(cancion, sala) {
     
     // Si es stream de radio directo (no YouTube), conectar ffmpeg directo
     if(esStreamDirecto) {
-      console.log(`[stream] � Stream de radio directo detectado: ${cancion.url}`);
+      console.log(`[stream] 📻 Stream de radio directo detectado: ${cancion.url}`);
     } else {
-      // Intentar con play-dl primero (solo para YouTube)
-      try {
-        console.log(`[stream] 🔊 Intentando obtener stream con play-dl...`);
-        stream = await play.stream(cancion.url, { quality: 1 });
-        console.log(`[stream] ✅ Stream obtenido con play-dl`);
-      } catch(e) {
-        const errorMsg = e.message || e.toString() || '';
-        console.error(`[stream] ❌ play-dl falló: ${errorMsg}`);
-        console.log(`[stream] 🔄 Usando yt-dlp (fallback automático)...`);
-        usarYtdlp = true;
-      }
+      // Usar yt-dlp directamente (play-dl deshabilitado - causa crashes)
+      console.log(`[stream] � Usando yt-dlp con cookies para YouTube...`);
+      usarYtdlp = true;
     }
     
     try {
