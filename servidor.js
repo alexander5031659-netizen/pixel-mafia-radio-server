@@ -552,6 +552,17 @@ app.get('/salas', (req, res) => {
   res.json(info);
 });
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    salasActivas: salas.size,
+    version: '2.0'
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   const cloudflareUrl = process.env.CLOUDFLARE_URL;
