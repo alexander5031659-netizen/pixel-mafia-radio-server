@@ -141,6 +141,30 @@ if (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET) {
   console.warn('   Obtén credenciales en: https://developer.spotify.com/dashboard');
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🎵 LIBRESPOT - Reproducción Real de Spotify
+// ═══════════════════════════════════════════════════════════
+const LIBRESPOT_PATH = path.join(__dirname, 'bin', 'librespot');
+
+// Verificar que librespot existe
+if (fs.existsSync(LIBRESPOT_PATH)) {
+  console.log('✅ [librespot] Binario encontrado:', LIBRESPOT_PATH);
+} else {
+  console.warn('⚠️ [librespot] NO encontrado. Se instalará en el build.');
+  console.warn('   Ruta esperada:', LIBRESPOT_PATH);
+}
+
+// Configuración de librespot (necesita usuario/contraseña de Spotify Premium)
+const SPOTIFY_USERNAME = process.env.SPOTIFY_USERNAME || '';
+const SPOTIFY_PASSWORD = process.env.SPOTIFY_PASSWORD || '';
+
+if (SPOTIFY_USERNAME && SPOTIFY_PASSWORD) {
+  console.log('✅ [librespot] Credenciales de Spotify Premium configuradas');
+} else {
+  console.warn('⚠️ [librespot] Sin credenciales. !play Spotify no funcionará.');
+  console.warn('   Agrega SPOTIFY_USERNAME y SPOTIFY_PASSWORD en Environment Variables');
+}
+
 // Sistema de colas por sala con buffer compartido
 const salas = new Map(); // salaId -> { cola, cancionActual, reproduciendo, clientes, buffer, bufferIndex, procesos, modoFondo, cancionesFondo }
 
@@ -520,29 +544,35 @@ async function reproducirFondo(salaId) {
     }
 }
 
-// Stream de una canción con buffer compartido para sincronización
 async function streamCancion(cancion, sala) {
   return new Promise(async (resolve, reject) => {
     let stream;
     let usarYtdlp = false;
+    let usarLibrespot = false;
     let esStreamDirecto = cancion.esStream === true;
+    let esSpotify = cancion.esSpotify === true && cancion.spotifyUri;
     
     // Si es stream de radio directo (no YouTube), conectar ffmpeg directo
     if(esStreamDirecto) {
       console.log(`[stream] 📻 Stream de radio directo detectado: ${cancion.url}`);
+    } else if(esSpotify && fs.existsSync(LIBRESPOT_PATH) && SPOTIFY_USERNAME && SPOTIFY_PASSWORD) {
+      // Usar librespot para Spotify Premium
+      console.log(`[stream] 🎵 Usando librespot para Spotify...`);
+      usarLibrespot = true;
     } else {
       // Usar yt-dlp directamente (play-dl deshabilitado - causa crashes)
-      console.log(`[stream] � Usando yt-dlp con cookies para YouTube...`);
+      console.log(`[stream] 🔊 Usando yt-dlp con cookies para YouTube...`);
       usarYtdlp = true;
     }
     
     try {
       let ffmpeg;
       let ytdlpProcess = null;
+      let librespotProcess = null;
       
       if(esStreamDirecto) {
         // Stream directo: ffmpeg se conecta directamente a la URL
-        console.log(`[stream] � Conectando ffmpeg a stream de radio...`);
+        console.log(`[stream] 🔊 Conectando ffmpeg a stream de radio...`);
         ffmpeg = spawn('ffmpeg', [
           '-hide_banner', '-loglevel', 'error',
           '-i', cancion.url,     // Conectar directo a la URL del stream
@@ -555,6 +585,44 @@ async function streamCancion(cancion, sala) {
         ], { stdio: ['ignore', 'pipe', 'pipe'] });
         
         console.log(`[stream] ✅ ffmpeg conectado a stream de radio`);
+        
+      } else if(usarLibrespot) {
+        // Usar librespot para Spotify → ffmpeg
+        console.log(`[stream] 🎵 Iniciando librespot para Spotify...`);
+        console.log(`[stream] 🎵 URI: ${cancion.spotifyUri}`);
+        
+        // Iniciar librespot con usuario/contraseña
+        librespotProcess = spawn(LIBRESPOT_PATH, [
+          '-u', SPOTIFY_USERNAME,
+          '-p', SPOTIFY_PASSWORD,
+          '--backend', 'pipe',
+          '--device', 'pipe:1',
+          '-U', cancion.spotifyUri  // URI de Spotify a reproducir
+        ], { stdio: ['ignore', 'pipe', 'pipe'] });
+        
+        // Luego iniciar ffmpeg que recibe de librespot (raw PCM)
+        ffmpeg = spawn('ffmpeg', [
+          '-hide_banner', '-loglevel', 'error',
+          '-f', 's16le',          // Formato raw PCM 16-bit little-endian
+          '-ar', '44100',         // Sample rate
+          '-ac', '2',             // 2 canales (stereo)
+          '-i', 'pipe:0',         // Entrada desde librespot
+          '-vn',
+          '-f', 'mp3',
+          '-b:a', '128k',
+          'pipe:1'
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        
+        // Conectar librespot stdout a ffmpeg stdin
+        librespotProcess.stdout.pipe(ffmpeg.stdin);
+        librespotProcess.stderr.on('data', (data) => {
+          console.log(`[librespot] ${data.toString().trim()}`);
+        });
+        librespotProcess.on('error', (err) => {
+          console.error(`[librespot] Error: ${err.message}`);
+        });
+        
+        console.log(`[stream] ✅ librespot + ffmpeg iniciados`);
         
       } else if(usarYtdlp) {
         // Usar yt-dlp → ffmpeg para obtener y convertir audio
