@@ -2,7 +2,6 @@
 const express = require('express');
 const { spawn } = require('child_process');
 const cors = require('cors');
-const play = require('play-dl');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
