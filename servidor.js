@@ -55,7 +55,7 @@ async function refreshSpotifyToken() {
   }
 }
 
-// Buscar canción en Spotify y luego buscar audio en YouTube
+// Buscar canción en Spotify y reproducir con librespot (si está configurado)
 async function buscarSpotify(query) {
   const tokenValid = await refreshSpotifyToken();
   if (!tokenValid) {
@@ -75,56 +75,73 @@ async function buscarSpotify(query) {
     }
     
     const track = result.body.tracks.items[0];
+    const spotifyUri = track.uri; // URI para librespot: spotify:track:xxxx
     
     console.log(`✅ [Spotify] Encontrada: ${track.name} - ${track.artists[0].name}`);
+    console.log(`🎵 [Spotify] URI: ${spotifyUri}`);
     
-    // Construir query exacta para YouTube usando nombre de Spotify
-    const queryExacta = `${track.name} ${track.artists.map(a => a.name).join(' ')}`;
-    console.log(`🎵 [Spotify→YouTube] Buscando audio: "${queryExacta}"`);
+    // Verificar si librespot está disponible
+    const librespotDisponible = fs.existsSync(LIBRESPOT_PATH) && SPOTIFY_USERNAME && SPOTIFY_PASSWORD;
     
-    // Buscar en YouTube usando el nombre exacto de Spotify
-    let youtubeResult = null;
-    
-    // Intentar con yt-dlp primero
-    try {
-      youtubeResult = await buscarConYtdlp(queryExacta);
-      if (youtubeResult) {
-        console.log(`✅ [Spotify→YouTube] Audio encontrado: ${youtubeResult.titulo}`);
-      }
-    } catch (e) {
-      console.log(`  [yt-dlp] Error: ${e.message}`);
-    }
-    
-    // Si falló, intentar con scraping
-    if (!youtubeResult) {
+    if (librespotDisponible) {
+      // Usar librespot para reproducir directamente desde Spotify
+      console.log(`🎵 [librespot] Reproducción directa desde Spotify`);
+      
+      return {
+        titulo: `${track.name} - ${track.artists.map(a => a.name).join(', ')}`,
+        duracion: Math.floor(track.duration_ms / 1000),
+        url: spotifyUri, // URI de Spotify para librespot
+        spotifyUri: spotifyUri, // URI específico para librespot
+        esSpotify: true,
+        usarLibrespot: true, // Indicar que debe usar librespot
+        artista: track.artists[0].name,
+        nombre: track.name,
+        album: track.album.name,
+        imagen: track.album.images[0]?.url,
+        spotifyUrl: track.external_urls.spotify
+      };
+    } else {
+      // Fallback a YouTube (librespot no configurado)
+      console.log(`⚠️ [Spotify] librespot no configurado, intentando YouTube...`);
+      
+      const queryExacta = `${track.name} ${track.artists.map(a => a.name).join(' ')}`;
+      console.log(`🎵 [Spotify→YouTube] Buscando: "${queryExacta}"`);
+      
+      let youtubeResult = null;
+      
       try {
-        await delayIfNeeded();
-        youtubeResult = await buscarConScraping(queryExacta);
-        if (youtubeResult) {
-          console.log(`✅ [Spotify→YouTube] Audio encontrado (scraping): ${youtubeResult.titulo}`);
-        }
+        youtubeResult = await buscarConYtdlp(queryExacta);
       } catch (e) {
-        console.log(`  [scraping] Error: ${e.message}`);
+        console.log(`  [yt-dlp] Error: ${e.message}`);
       }
+      
+      if (!youtubeResult) {
+        try {
+          await delayIfNeeded();
+          youtubeResult = await buscarConScraping(queryExacta);
+        } catch (e) {
+          console.log(`  [scraping] Error: ${e.message}`);
+        }
+      }
+      
+      if (!youtubeResult) {
+        console.warn(`⚠️ [Spotify→YouTube] No se encontró audio`);
+        return null;
+      }
+      
+      return {
+        titulo: `${track.name} - ${track.artists.map(a => a.name).join(', ')}`,
+        duracion: youtubeResult.duracion || Math.floor(track.duration_ms / 1000),
+        url: youtubeResult.url,
+        esSpotify: true,
+        usarLibrespot: false,
+        artista: track.artists[0].name,
+        nombre: track.name,
+        album: track.album.name,
+        imagen: track.album.images[0]?.url,
+        spotifyUrl: track.external_urls.spotify
+      };
     }
-    
-    if (!youtubeResult) {
-      console.warn(`⚠️ [Spotify→YouTube] No se encontró audio para: ${queryExacta}`);
-      return null;
-    }
-    
-    // Retornar con información de Spotify + URL de YouTube
-    return {
-      titulo: `${track.name} - ${track.artists.map(a => a.name).join(', ')}`,
-      duracion: youtubeResult.duracion || Math.floor(track.duration_ms / 1000),
-      url: youtubeResult.url, // URL de YouTube (para reproducir)
-      esSpotify: true,
-      artista: track.artists[0].name,
-      nombre: track.name,
-      album: track.album.name,
-      imagen: track.album.images[0]?.url,
-      spotifyUrl: track.external_urls.spotify // Para referencia
-    };
     
   } catch (error) {
     console.error('❌ [Spotify] Error en búsqueda:', error.message);
@@ -550,12 +567,12 @@ async function streamCancion(cancion, sala) {
     let usarYtdlp = false;
     let usarLibrespot = false;
     let esStreamDirecto = cancion.esStream === true;
-    let esSpotify = cancion.esSpotify === true && cancion.spotifyUri;
+    let esSpotifyTrack = cancion.usarLibrespot === true && cancion.spotifyUri;
     
     // Si es stream de radio directo (no YouTube), conectar ffmpeg directo
     if(esStreamDirecto) {
       console.log(`[stream] 📻 Stream de radio directo detectado: ${cancion.url}`);
-    } else if(esSpotify && fs.existsSync(LIBRESPOT_PATH) && SPOTIFY_USERNAME && SPOTIFY_PASSWORD) {
+    } else if(esSpotifyTrack && fs.existsSync(LIBRESPOT_PATH) && SPOTIFY_USERNAME && SPOTIFY_PASSWORD) {
       // Usar librespot para Spotify Premium
       console.log(`[stream] 🎵 Usando librespot para Spotify...`);
       usarLibrespot = true;
