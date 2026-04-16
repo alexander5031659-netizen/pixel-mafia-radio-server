@@ -436,6 +436,7 @@ async function streamCancion(cancion, sala) {
           '--no-warnings',
           '--quiet',
           '--cookies', COOKIES_PATH,  // Usar cookies de YouTube (path absoluto)
+          '--extractor-args', 'youtube:player_client=android',  // Bypass bot detection con Android client
           cancion.url
         ], { stdio: ['ignore', 'pipe', 'pipe'] });
         
