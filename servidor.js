@@ -44,7 +44,7 @@ async function refreshSpotifyToken() {
   
   try {
     console.log('🎵 [Spotify] Renovando token de acceso...');
-    const data = await spototifyApi.clientCredentialsGrant();
+    const data = await spotifyApi.clientCredentialsGrant();
     spotifyApi.setAccessToken(data.body['access_token']);
     spotifyTokenExpires = now + (data.body['expires_in'] * 1000);
     console.log('✅ [Spotify] Token renovado exitosamente');
