@@ -88,7 +88,83 @@ async function buscarConPlayDl(query) {
   };
 }
 
-// Método 2: Buscar con YouTube scraping (sin API key)
+// Método 2: Buscar con yt-dlp usando cookies
+async function buscarConYtdlp(query) {
+  return new Promise((resolve) => {
+    const esUrl = String(query).startsWith('http');
+    let args;
+    
+    if (esUrl) {
+      // Si es URL directa, obtener info del video
+      args = [
+        '-j',  // Output JSON
+        '--cookies', 'cookies.txt',
+        '--no-check-certificates',
+        '--no-warnings',
+        query
+      ];
+    } else {
+      // Si es búsqueda, buscar y obtener primer resultado
+      args = [
+        'ytsearch1:' + query,  // Buscar en YouTube, 1 resultado
+        '-j',  // Output JSON
+        '--cookies', 'cookies.txt',
+        '--no-check-certificates',
+        '--no-warnings'
+      ];
+    }
+    
+    console.log(`  [yt-dlp] Buscando: "${query}"`);
+    
+    const ytdlp = spawn('yt-dlp', args, { 
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30000  // 30 segundos timeout
+    });
+    
+    let output = '';
+    let errorOutput = '';
+    
+    ytdlp.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    ytdlp.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+    
+    ytdlp.on('close', (code) => {
+      if (code !== 0) {
+        console.log(`  [yt-dlp] Error (code ${code}): ${errorOutput.slice(0, 200)}`);
+        return resolve(null);
+      }
+      
+      try {
+        // Parsear JSON output
+        const lines = output.trim().split('\n');
+        const jsonLine = lines.find(line => line.startsWith('{'));
+        if (!jsonLine) return resolve(null);
+        
+        const info = JSON.parse(jsonLine);
+        
+        resolve({
+          titulo: limpiarTitulo(info.title),
+          duracion: info.duration || 0,
+          url: info.webpage_url || info.url
+        });
+      } catch (e) {
+        console.log(`  [yt-dlp] Error parseando JSON: ${e.message}`);
+        resolve(null);
+      }
+    });
+    
+    ytdlp.on('error', (err) => {
+      console.log(`  [yt-dlp] Spawn error: ${err.message}`);
+      resolve(null);
+    });
+  });
+}
+
+// Método 3: Buscar con YouTube scraping (sin API key)
 async function buscarConScraping(query) {
   const https = require('https');
   const queryEncoded = encodeURIComponent(query + ' audio');
@@ -150,31 +226,33 @@ async function buscarYoutube(query) {
   
   await delayIfNeeded();
 
-  // Intentar con play-dl (3 reintentos con backoff exponencial)
-  for (let intento = 1; intento <= 3; intento++) {
-    try {
-      console.log(`  [play-dl] Intento ${intento}/3...`);
-      const resultado = await buscarConPlayDl(query);
-      if (resultado) {
-        console.log(`✅ Encontrada con play-dl: ${resultado.titulo}`);
-        return resultado;
-      }
-    } catch (e) {
-      console.log(`  [play-dl] Error intento ${intento}: ${e.message}`);
-      // Si es error 429, esperar más tiempo
-      if (e.message?.includes('429') || e.message?.includes('unusual traffic')) {
-        const waitTime = 30000 * intento; // 30s, 60s, 90s
-        console.log(`⚠️ Rate limit detectado, esperando ${waitTime/1000}s...`);
-        await new Promise(r => setTimeout(r, waitTime));
-      } else if (intento < 3) {
-        await new Promise(r => setTimeout(r, 3000 * intento)); // 3s, 6s, 9s
-      }
+  // MÉTODO 1: yt-dlp con cookies (más confiable con autenticación)
+  try {
+    console.log('  [método 1] Intentando con yt-dlp + cookies...');
+    const resultado = await buscarConYtdlp(query);
+    if (resultado) {
+      console.log(`✅ Encontrada con yt-dlp: ${resultado.titulo}`);
+      return resultado;
     }
+  } catch (e) {
+    console.log(`  [yt-dlp] Error: ${e.message}`);
   }
 
-  // Fallback: scraping directo de YouTube
+  // MÉTODO 2: Intentar con play-dl (sin cookies, puede fallar en cloud)
   try {
-    console.log('  [scraping] Intentando búsqueda alternativa...');
+    console.log('  [método 2] Intentando con play-dl...');
+    const resultado = await buscarConPlayDl(query);
+    if (resultado) {
+      console.log(`✅ Encontrada con play-dl: ${resultado.titulo}`);
+      return resultado;
+    }
+  } catch (e) {
+    console.log(`  [play-dl] Error: ${e.message}`);
+  }
+
+  // MÉTODO 3: Fallback scraping directo de YouTube
+  try {
+    console.log('  [método 3] Intentando búsqueda alternativa (scraping)...');
     await delayIfNeeded();
     const resultado = await buscarConScraping(query);
     if (resultado) {
@@ -566,6 +644,7 @@ app.get('/radio/:salaId', (req, res) => {
 
 // Agregar canción a la cola de una sala
 app.get('/play', async (req, res) => {
+  try {
   const query = req.query.q || req.query.url;
   const salaId = req.query.sala || 'sala1';
   
@@ -668,6 +747,10 @@ app.get('/play', async (req, res) => {
     radioUrl: `${HOST}/stream/${salaId}`,
     esFondo: false
   });
+  } catch (error) {
+    console.error(`[PLAY] ❌ Error en /play:`, error.message);
+    return res.status(500).json({ error: 'Error interno del servidor al buscar la canción' });
+  }
 });
 
 // Info de la canción actual y cola de una sala
